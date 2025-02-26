@@ -58,7 +58,8 @@ const DEFAULT_CONFIG = {
   status: "not_started",
   cyclesCompleted: 0,
   resumePoint: null,
-  totalCycles: CYCLE_COUNT
+  totalCycles: CYCLE_COUNT,
+  scriptCompletedToday: false
 };
 
 function readConfig() {
@@ -168,7 +169,7 @@ async function runScriptWithProgress(scriptName, totalCycles) {
           config.status = "in_progress";
           config.resumePoint = {
             script: scriptName,
-            cycle: Math.max(1, completedCycles)  // Döngü numarası olarak algılanan değeri kullan
+            cycle: completedCycles
           };
           updateConfig(config);
 
@@ -239,8 +240,20 @@ async function runDailySchedule() {
     let config = readConfig();
     const today = new Date();
 
+    // Config'de scriptCompletedToday yoksa, ekle
+    if (config.scriptCompletedToday === undefined) {
+      config.scriptCompletedToday = false;
+      updateConfig(config);
+    }
+
+    // Gün değişimi kontrolü - Yeni güne geçtikse scriptCompletedToday'i sıfırla
+    if (!isSameDay(new Date(config.lastRunDate), today)) {
+      config.scriptCompletedToday = false;
+      updateConfig(config);
+    }
+
     // Kaldığı yerden devam etme kontrolü
-    if (config.resumePoint && isSameDay(new Date(config.lastRunDate), today)) {
+    if (config.resumePoint && isSameDay(new Date(config.lastRunDate), today) && !config.scriptCompletedToday) {
       // Eğer bugünün scripti tamamlanmadıysa devam et
       if (config.status === "in_progress" || config.status === "paused") {
         console.log(`⏯️ Kaldığı yerden devam ediliyor: ${config.resumePoint.script}`.yellow);
@@ -248,14 +261,17 @@ async function runDailySchedule() {
         try {
           await runScriptWithProgress(config.resumePoint.script, CYCLE_COUNT);
           
-          // Script başarıyla tamamlandıysa bir sonraki scripta geç
+          // Script başarıyla tamamlandıysa bir sonraki scripta geç ve bugün için tamamlandı işaretle
           config = readConfig();
           config.currentScriptIndex = (config.currentScriptIndex + 1) % SCRIPT_SEQUENCE.length;
           config.lastRunDate = new Date().toISOString();
           config.cyclesCompleted = 0;
           config.status = "not_started";
           config.resumePoint = null;
+          config.scriptCompletedToday = true; // Bugün için script tamamlandı
           updateConfig(config);
+          
+          console.log(`\n✅ ${config.currentScript} scripti tamamlandı. Bir sonraki gün ${SCRIPT_SEQUENCE[config.currentScriptIndex]} çalıştırılacak.`.green);
           
         } catch (error) {
           logError(error, 'Devam Ettirme Hatası');
@@ -267,6 +283,19 @@ async function runDailySchedule() {
     // Normal günlük çalışma döngüsü
     while (true) {
       config = readConfig(); // Her zaman en güncel config'i oku
+      
+      // Eğer bugün için bir script tamamlanmışsa, bir sonraki güne kadar bekle
+      if (config.scriptCompletedToday) {
+        console.log(`\n⏸️ Bugün için bir script tamamlandı. Yarına kadar bekleniyor...`.yellow);
+        await waitUntilNextDay();
+        
+        // Yeni gün başladı, scriptCompletedToday'i sıfırla
+        config = readConfig();
+        config.scriptCompletedToday = false;
+        updateConfig(config);
+        continue; // Döngünün başına dön
+      }
+      
       const currentScript = SCRIPT_SEQUENCE[config.currentScriptIndex];
       
       try {
@@ -282,12 +311,18 @@ async function runDailySchedule() {
         config.cyclesCompleted = 0;
         config.status = "not_started";
         config.resumePoint = null;
+        config.scriptCompletedToday = true; // Bugün için script tamamlandı
         updateConfig(config);
         
         console.log(`\n✅ ${currentScript} scripti tamamlandı. Bir sonraki gün ${SCRIPT_SEQUENCE[config.currentScriptIndex]} çalıştırılacak.`.green);
         
         // Bir sonraki güne kadar bekle
         await waitUntilNextDay();
+        
+        // Yeni gün başladı, scriptCompletedToday'i sıfırla
+        config = readConfig();
+        config.scriptCompletedToday = false;
+        updateConfig(config);
       } catch (error) {
         logError(error, 'Günlük Çalışma Döngüsü Hatası');
         console.error(`❌ Hata oluştu, 5 dk sonra tekrar denenecek.`.red);
