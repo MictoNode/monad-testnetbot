@@ -82,7 +82,11 @@ function updateConfig(config) {
 }
 
 function isSameDay(date1, date2) {
-  return date1.toDateString() === date2.toDateString();
+  const d1 = new Date(date1);
+  const d2 = new Date(date2);
+  return d1.getFullYear() === d2.getFullYear() &&
+         d1.getMonth() === d2.getMonth() &&
+         d1.getDate() === d2.getDate();
 }
 
 async function waitUntilNextDay() {
@@ -104,11 +108,32 @@ async function runScriptWithProgress(scriptName, totalCycles) {
       : 1;
 
     // Kalan cycle sayısını hesapla
-    const remainingCycles = totalCycles - (config.cyclesCompleted || 0);
+    const remainingCycles = Math.max(0, totalCycles - (startCycle - 1));
+
+    // Eğer kalan cycle yoksa, scripti çalıştırmadan başarılı olarak dön
+    if (remainingCycles <= 0) {
+      console.log(`✅ Script ${scriptName} için tüm döngüler tamamlandı.`.green);
+      
+      // Config'i güncelle
+      config.cyclesCompleted = totalCycles;
+      config.status = "completed";
+      config.currentScript = scriptName;
+      config.resumePoint = null;
+      updateConfig(config);
+      
+      logAction('Script Tamamlama', {
+        script: scriptName,
+        status: "success",
+        message: "No cycles remaining"
+      });
+      
+      return resolve(totalCycles);
+    }
 
     // Toplam cycle sayısını ve diğer bilgileri güncelle
     config.totalCycles = totalCycles;
     config.currentScript = scriptName;
+    config.status = "in_progress";
     updateConfig(config);
 
     logAction('Script Başlatma', {
@@ -118,11 +143,14 @@ async function runScriptWithProgress(scriptName, totalCycles) {
       remainingCycles: remainingCycles
     });
 
+    console.log(`Starting ${scriptName} from cycle ${startCycle} to ${startCycle + remainingCycles - 1}...`.green);
+
     const args = [
       "./scripts/" + scriptName + ".js", 
       startCycle.toString(), 
       remainingCycles.toString()
     ];
+    
     const child = spawn("node", args, { stdio: ["pipe", "pipe", "pipe"] });
     
     child.stdout.on("data", (data) => {
@@ -155,6 +183,10 @@ async function runScriptWithProgress(scriptName, totalCycles) {
       }
     });
 
+    child.stderr.on("data", (data) => {
+      process.stderr.write(data);
+    });
+
     child.on("close", (code) => {
       try {
         config = readConfig();
@@ -163,6 +195,7 @@ async function runScriptWithProgress(scriptName, totalCycles) {
         if (code === 0) {
           config.cyclesCompleted = totalCycles;
           config.status = "completed";
+          config.resumePoint = null; // Reset resume point
         } else {
           config.status = "failed";
         }
@@ -200,12 +233,22 @@ async function runDailySchedule() {
 
     // Kaldığı yerden devam etme kontrolü
     if (config.resumePoint && isSameDay(new Date(config.lastRunDate), today)) {
-      // Eğer bugünün döngüsü tamamlanmadıysa devam et
-      if (config.cyclesCompleted < CYCLE_COUNT) {
+      // Eğer bugünün scripti tamamlanmadıysa devam et
+      if (config.status === "in_progress" || config.status === "paused") {
         console.log(`⏯️ Kaldığı yerden devam ediliyor: ${config.resumePoint.script}`.yellow);
         
         try {
           await runScriptWithProgress(config.resumePoint.script, CYCLE_COUNT);
+          
+          // Script başarıyla tamamlandıysa bir sonraki scripta geç
+          config = readConfig();
+          config.currentScriptIndex = (config.currentScriptIndex + 1) % SCRIPT_SEQUENCE.length;
+          config.lastRunDate = new Date().toISOString();
+          config.cyclesCompleted = 0;
+          config.status = "not_started";
+          config.resumePoint = null;
+          updateConfig(config);
+          
         } catch (error) {
           logError(error, 'Devam Ettirme Hatası');
           console.error("❌ Devam ettirme sırasında hata oluştu.".red);
@@ -215,10 +258,13 @@ async function runDailySchedule() {
 
     // Normal günlük çalışma döngüsü
     while (true) {
+      config = readConfig(); // Her zaman en güncel config'i oku
       const currentScript = SCRIPT_SEQUENCE[config.currentScriptIndex];
       
       try {
-        // Her script tam 50 cycle çalışacak
+        console.log(`🚀 Bugünün scripti çalıştırılıyor: ${currentScript}`.cyan);
+        
+        // Her script tam CYCLE_COUNT cycle çalışacak
         await runScriptWithProgress(currentScript, CYCLE_COUNT);
         
         // Bir sonraki betike geç
@@ -230,11 +276,13 @@ async function runDailySchedule() {
         config.resumePoint = null;
         updateConfig(config);
         
+        console.log(`\n✅ ${currentScript} scripti tamamlandı. Bir sonraki gün ${SCRIPT_SEQUENCE[config.currentScriptIndex]} çalıştırılacak.`.green);
+        
         // Bir sonraki güne kadar bekle
         await waitUntilNextDay();
       } catch (error) {
         logError(error, 'Günlük Çalışma Döngüsü Hatası');
-        console.error("❌ Hata oluştu, 5 dk sonra tekrar denenecek.".red);
+        console.error(`❌ Hata oluştu, 5 dk sonra tekrar denenecek.`.red);
         await new Promise((resolve) => setTimeout(resolve, 5 * 60 * 1000));
       }
     }
@@ -285,10 +333,19 @@ if (process.argv.includes("daily")) {
       type: "select",
       name: "script",
       message: "Çalıştırılacak scripti seç:",
-      choices: SCRIPT_SEQUENCE.map((s) => ({ title: s, value: s })).concat({ title: "Çıkış", value: "exit" }),
+      choices: SCRIPT_SEQUENCE.map((s) => ({ title: s, value: s }))
+        .concat({ title: "Günlük çalışma modunu başlat", value: "daily" })
+        .concat({ title: "Çıkış", value: "exit" }),
     });
+    
     if (!response.script || response.script === "exit") return;
-    console.log(`Running ${response.script}...`);
-    spawn("node", ["./scripts/" + response.script + ".js"], { stdio: "inherit" });
+    
+    if (response.script === "daily") {
+      console.log("Günlük çalışma modu başlatılıyor...");
+      runDailySchedule().catch(console.error);
+    } else {
+      console.log(`Running ${response.script}...`);
+      spawn("node", ["./scripts/" + response.script + ".js"], { stdio: "inherit" });
+    }
   })().catch(console.error);
 }
