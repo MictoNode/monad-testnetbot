@@ -168,7 +168,7 @@ async function runScriptWithProgress(scriptName, totalCycles) {
           config.status = "in_progress";
           config.resumePoint = {
             script: scriptName,
-            cycle: completedCycles
+            cycle: Math.max(1, completedCycles)  // Döngü numarası olarak algılanan değeri kullan
           };
           updateConfig(config);
 
@@ -191,25 +191,33 @@ async function runScriptWithProgress(scriptName, totalCycles) {
       try {
         config = readConfig();
         
-        // Başarılı tamamlanmışsa
-        if (code === 0) {
+        // Başarılı tamamlanmışsa - Burayı değiştiriyoruz
+        // Hem çıkış kodu 0 olmalı hem de tüm döngüler tamamlanmış olmalı
+        if (code === 0 && config.cyclesCompleted >= totalCycles) {
           config.cyclesCompleted = totalCycles;
           config.status = "completed";
           config.resumePoint = null; // Reset resume point
         } else {
+          // Kısmi başarı veya tamamen başarısız durumunda bile "failed" olarak işaretle
           config.status = "failed";
+          // Kalan döngüleri tekrar deneyebilmek için resumePoint korunuyor
         }
         
         config.currentScript = scriptName;
         updateConfig(config);
-
+    
         logAction('Script Tamamlama', {
           script: scriptName,
-          status: code === 0 ? "success" : "failed",
+          status: code === 0 && config.cyclesCompleted >= totalCycles ? "success" : "failed",
           exitCode: code
         });
         
-        code === 0 ? resolve(totalCycles) : reject(new Error(`Hata kodu: ${code}`));
+        // Burayı da değiştiriyoruz - Tam başarı durumunda resolve, değilse reject
+        if (code === 0 && config.cyclesCompleted >= totalCycles) {
+          resolve(totalCycles);
+        } else {
+          reject(new Error(`Tam tamamlanmadı: ${config.cyclesCompleted}/${totalCycles} döngü`));
+        }
       } catch (configError) {
         logError(configError, 'Script Tamamlama Kaydetme');
         reject(configError);
