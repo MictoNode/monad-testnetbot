@@ -1,11 +1,7 @@
 require("dotenv").config();
 const ethers = require("ethers");
 const colors = require("colors");
-const displayHeader = require("../src/displayHeader.js");
-const readline = require("readline");
 const axios = require("axios");
-
-displayHeader();
 
 const RPC_URL = "https://testnet-rpc.monad.xyz/";
 const EXPLORER_URL = "https://testnet.monadexplorer.com/tx/";
@@ -17,17 +13,6 @@ const contractAddress = "0xb2f82D0f38dc453D596Ad40A37799446Cc89274A";
 const gasLimitStake = 500000;
 const gasLimitUnstake = 800000;
 const gasLimitClaim = 800000;
-
-const minimalABI = [
-  "function getPendingUnstakeRequests(address) view returns (uint256[] memory)",
-];
-
-const contract = new ethers.Contract(contractAddress, minimalABI, provider);
-
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
 
 function getRandomAmount() {
   const min = 0.01;
@@ -127,160 +112,56 @@ async function checkClaimableStatus(walletAddress) {
   try {
     const apiUrl = `https://liquid-staking-backend-prod-b332fbe9ccfe.herokuapp.com/withdrawal_requests?address=${walletAddress}`;
     const response = await axios.get(apiUrl);
-
-    const claimableRequest = response.data.find(
-      (request) => !request.claimed && request.is_claimable
-    );
-
-    if (claimableRequest) {
-      console.log(`Found claimable request ID: ${claimableRequest.id}`);
-      return {
-        id: claimableRequest.id,
-        isClaimable: true,
-      };
-    }
-    return {
-      id: null,
-      isClaimable: false,
-    };
+    
+    // Daha önce yarım kalan kod tamamlanacak
+    return response.data;
   } catch (error) {
-    console.error(
-      "❌ Failed to check claimable status from API:".red,
-      error.message
-    );
-    return {
-      id: null,
-      isClaimable: false,
-    };
-  }
-}
-
-async function claimMON(cycleNumber) {
-  try {
-    console.log(`\n[Cycle ${cycleNumber}] Checking claimable withdrawals...`);
-
-    const { id, isClaimable } = await checkClaimableStatus(wallet.address);
-
-    if (!isClaimable || !id) {
-      console.log("No claimable withdrawals found at this time");
-      return null;
-    }
-
-    console.log(`Preparing to claim withdrawal request ID: ${id}`);
-
-    const data =
-      "0x492e47d2" +
-      "0000000000000000000000000000000000000000000000000000000000000040" +
-      ethers.utils.hexZeroPad(wallet.address, 32).slice(2) +
-      "0000000000000000000000000000000000000000000000000000000000000001" +
-      ethers.utils
-        .hexZeroPad(ethers.BigNumber.from(id).toHexString(), 32)
-        .slice(2);
-
-    const tx = {
-      to: contractAddress,
-      data: data,
-      gasLimit: ethers.utils.hexlify(gasLimitClaim),
-      value: ethers.utils.parseEther("0"),
-    };
-
-    console.log("Sending claim transaction...");
-    const txResponse = await wallet.sendTransaction(tx);
-    console.log(`Transaction sent: ${EXPLORER_URL}${txResponse.hash}`);
-
-    console.log("Waiting for transaction confirmation...");
-    const receipt = await txResponse.wait();
-    console.log(`Claim successful for request ID: ${id}`.green.underline);
-
-    return receipt;
-  } catch (error) {
-    console.error("Claim failed:", error.message);
+    console.error("❌ Error checking claimable status:".red, error.message);
     throw error;
   }
-}
-
-async function runCycle(cycleNumber) {
-  try {
-    console.log(`\n=== Starting Cycle ${cycleNumber} ===`);
-
-    const { stakeAmount } = await stakeMON(cycleNumber);
-
-    const delayTimeBeforeUnstake = getRandomDelay();
-    console.log(
-      `🔄 Waiting for ${
-        delayTimeBeforeUnstake / 1000
-      } seconds before requesting unstake...`
-    );
-    await delay(delayTimeBeforeUnstake);
-
-    await requestUnstakeAprMON(stakeAmount, cycleNumber);
-
-    console.log(
-      `Waiting for 660 seconds (11 minutes) before checking claim status...`
-        .magenta
-    );
-    await delay(660000);
-
-    await claimMON(cycleNumber);
-
-    console.log(
-      `=== Cycle ${cycleNumber} completed successfully! ===`.magenta.bold
-    );
-  } catch (error) {
-    console.error(`❌ Cycle ${cycleNumber} failed:`.red, error.message);
-    throw error;
-  }
-}
-
-function getCycleCount() {
-  return new Promise((resolve) => {
-    rl.question("How many staking cycles would you like to run? ", (answer) => {
-      const cycleCount = parseInt(answer);
-      if (isNaN(cycleCount) || cycleCount <= 0) {
-        console.error("Please enter a valid positive number!".red);
-        rl.close();
-        process.exit(1);
-      }
-      resolve(cycleCount);
-    });
-  });
 }
 
 async function main() {
-  try {
-    console.log("Starting aPriori Staking operations...".green);
+  const startCycle = parseInt(process.argv[2] || 1);
+  const remainingCycles = parseInt(process.argv[3] || 50);
+  const totalCycles = startCycle + remainingCycles - 1;
 
-    const cycleCount = await getCycleCount();
-    console.log(`Running ${cycleCount} cycles...`.yellow);
+  console.log(`Starting staking cycles from ${startCycle} to ${totalCycles}...`.green);
 
-    for (let i = 1; i <= cycleCount; i++) {
-      await runCycle(i);
+  for (let i = startCycle; i <= totalCycles; i++) {
+    try {
+      console.log(`Cycle ${i} of ${totalCycles}:`.magenta);
 
-      if (i < cycleCount) {
+      const { stakeAmount } = await stakeMON(i);
+
+      const delayTime = getRandomDelay();
+      console.log(`Waiting for ${delayTime / 1000} seconds before unstaking...`);
+      await delay(delayTime);
+
+      await requestUnstakeAprMON(stakeAmount, i);
+
+      // Opsiyonel: Claimable durumu kontrol etme
+      try {
+        const claimableStatus = await checkClaimableStatus(wallet.address);
+        console.log("Claimable status:", claimableStatus);
+      } catch (claimError) {
+        console.error("Error checking claimable status:", claimError.message);
+      }
+
+      if (i < totalCycles) {
         const interCycleDelay = getRandomDelay();
         console.log(
           `\nWaiting ${interCycleDelay / 1000} seconds before next cycle...`
         );
         await delay(interCycleDelay);
       }
+    } catch (error) {
+      console.error(`❌ Cycle ${i} failed:`.red, error.message);
+      break;
     }
-
-    console.log(
-      `\nAll ${cycleCount} cycles completed successfully!`.green.bold
-    );
-  } catch (error) {
-    console.error("Operation failed:".red, error.message);
-  } finally {
-    rl.close();
   }
+
+  console.log(`\nAll cycles from ${startCycle} to ${totalCycles} completed successfully!`.green.bold);
 }
 
-main();
-
-module.exports = {
-  stakeMON,
-  requestUnstakeAprMON,
-  claimMON,
-  getRandomAmount,
-  getRandomDelay,
-};
+main().catch(console.error);

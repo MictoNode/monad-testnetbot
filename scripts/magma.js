@@ -1,10 +1,6 @@
 require("dotenv").config();
 const ethers = require("ethers");
 const colors = require("colors");
-const displayHeader = require("../src/displayHeader.js");
-const readline = require("readline");
-
-displayHeader();
 
 const RPC_URL = "https://testnet-rpc.monad.xyz/";
 const EXPLORER_URL = "https://testnet.monadexplorer.com/tx/";
@@ -15,11 +11,6 @@ const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 const contractAddress = "0x2c9C959516e9AAEdB2C748224a41249202ca8BE7";
 const gasLimitStake = 500000;
 const gasLimitUnstake = 800000;
-
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
 
 function getRandomAmount() {
   const min = 0.01;
@@ -104,80 +95,43 @@ async function unstakeGMON(amountToUnstake, cycleNumber) {
     return receipt;
   } catch (error) {
     console.error("❌ Unstaking failed:".red, error.message);
-    console.error("Full error:", JSON.stringify(error, null, 2));
     throw error;
   }
-}
-
-async function runCycle(cycleNumber) {
-  try {
-    console.log(`\n=== Starting Cycle ${cycleNumber} ===`.magenta.bold);
-
-    const { stakeAmount } = await stakeMON(cycleNumber);
-
-    const delayTime = getRandomDelay();
-    console.log(`Waiting for ${delayTime / 1000} seconds before unstaking...`);
-    await delay(delayTime);
-
-    await unstakeGMON(stakeAmount, cycleNumber);
-
-    console.log(
-      `=== Cycle ${cycleNumber} completed successfully! ===`.magenta.bold
-    );
-  } catch (error) {
-    console.error(`❌ Cycle ${cycleNumber} failed:`.red, error.message);
-    throw error;
-  }
-}
-
-function getCycleCount() {
-  return new Promise((resolve) => {
-    rl.question("How many staking cycles would you like to run? ", (answer) => {
-      const cycleCount = parseInt(answer);
-      if (isNaN(cycleCount) || cycleCount <= 0) {
-        console.error("Please enter a valid positive number!".red);
-        rl.close();
-        process.exit(1);
-      }
-      resolve(cycleCount);
-    });
-  });
 }
 
 async function main() {
-  try {
-    console.log("Starting Magma Staking operations...".green);
+  const startCycle = parseInt(process.argv[2] || 1);
+  const remainingCycles = parseInt(process.argv[3] || 50);
+  const totalCycles = startCycle + remainingCycles - 1;
 
-    const cycleCount = await getCycleCount();
-    console.log(`Running ${cycleCount} cycles...`.yellow);
+  console.log(`Starting staking cycles from ${startCycle} to ${totalCycles}...`.green);
 
-    for (let i = 1; i <= cycleCount; i++) {
-      await runCycle(i);
+  for (let i = startCycle; i <= totalCycles; i++) {
+    try {
+      console.log(`Cycle ${i} of ${totalCycles}:`.magenta);
 
-      if (i < cycleCount) {
+      const { stakeAmount } = await stakeMON(i);
+
+      const delayTime = getRandomDelay();
+      console.log(`Waiting for ${delayTime / 1000} seconds before unstaking...`);
+      await delay(delayTime);
+
+      await unstakeGMON(stakeAmount, i);
+
+      if (i < totalCycles) {
         const interCycleDelay = getRandomDelay();
         console.log(
           `\nWaiting ${interCycleDelay / 1000} seconds before next cycle...`
         );
         await delay(interCycleDelay);
       }
+    } catch (error) {
+      console.error(`❌ Cycle ${i} failed:`.red, error.message);
+      break;
     }
-
-    console.log(
-      `\nAll ${cycleCount} cycles completed successfully!`.green.bold
-    );
-  } catch (error) {
-    console.error("Operation failed:".red, error.message);
-  } finally {
-    rl.close();
   }
+
+  console.log(`\nAll cycles from ${startCycle} to ${totalCycles} completed successfully!`.green.bold);
 }
 
-main();
-
-module.exports = {
-  stakeMON,
-  unstakeGMON,
-  getRandomAmount,
-  getRandomDelay,
-};
+main().catch(console.error);

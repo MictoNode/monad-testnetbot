@@ -1,9 +1,6 @@
 require("dotenv").config();
 const { ethers } = require("ethers");
 const colors = require("colors");
-const readline = require("readline");
-const displayHeader = require("../src/displayHeader.js");
-displayHeader();
 
 const RPC_URL = "https://testnet-rpc.monad.xyz/";
 const EXPLORER_URL = "https://testnet.monadexplorer.com/tx/";
@@ -45,6 +42,7 @@ async function wrapMON(amount) {
     await tx.wait();
   } catch (error) {
     console.error("❌ Error wrapping MON:".red, error);
+    throw error;
   }
 }
 
@@ -60,78 +58,37 @@ async function unwrapMON(amount) {
     await tx.wait();
   } catch (error) {
     console.error("❌ Error unwrapping WMON:".red, error);
+    throw error;
   }
 }
 
-async function runSwapCycle(cycles, interval) {
-  let cycleCount = 0;
+async function main() {
+  const startCycle = parseInt(process.argv[2] || 1);
+  const remainingCycles = parseInt(process.argv[3] || 50);
+  const totalCycles = startCycle + remainingCycles - 1;
 
-  if (interval) {
-    const intervalId = setInterval(async () => {
-      if (cycleCount < cycles) {
-        const randomAmount = getRandomAmount();
-        const randomDelay = getRandomDelay();
-        console.log(`Cycle ${cycleCount + 1} of ${cycles}:`.magenta);
-        await wrapMON(randomAmount);
-        await unwrapMON(randomAmount);
-        cycleCount++;
-        console.log(
-          `Next cycle will be after ${randomDelay / 1000 / 60} minute(s)`.yellow
-        );
-      } else {
-        clearInterval(intervalId);
-        console.log(`All ${cycles} cycles completed`.green);
-      }
-    }, interval * 60 * 60 * 1000);
-  } else {
-    for (let i = 0; i < cycles; i++) {
+  console.log(`Starting swap cycles from ${startCycle} to ${totalCycles}...`.green);
+
+  for (let i = startCycle; i <= totalCycles; i++) {
+    try {
+      console.log(`Cycle ${i} of ${totalCycles}:`.magenta);
+      
       const randomAmount = getRandomAmount();
-      const randomDelay = getRandomDelay();
-      console.log(`Cycle ${i + 1} of ${cycles}:`.magenta);
       await wrapMON(randomAmount);
       await unwrapMON(randomAmount);
+
+      const randomDelay = getRandomDelay();
       console.log(
-        `Waiting for ${randomDelay / 1000 / 60} minute(s) before next cycle...`
-          .yellow
+        `Waiting for ${randomDelay / 1000} seconds before next cycle...`.yellow
       );
       await new Promise((resolve) => setTimeout(resolve, randomDelay));
+    } catch (error) {
+      console.error(`❌ Cycle ${i} failed:`.red, error.message);
+      break;
     }
-    console.log(`All ${cycles} cycles completed`.green);
   }
+
+  console.log(`All cycles from ${startCycle} to ${totalCycles} completed`.green);
 }
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
-
-rl.question(
-  "How many swap cycles would you like to run? (Press enter to skip): ",
-  (cycles) => {
-    rl.question(
-      "How often (in hours) would you like the cycle to run? (Press enter to skip): ",
-      (hours) => {
-        let cyclesCount = cycles ? parseInt(cycles) : 1;
-        let intervalHours = hours ? parseInt(hours) : null;
-
-        if (
-          isNaN(cyclesCount) ||
-          (intervalHours !== null && isNaN(intervalHours))
-        ) {
-          console.log("❌ Invalid input. Please enter valid numbers.".red);
-          rl.close();
-          return;
-        }
-
-        console.log(
-          `Starting ${cyclesCount} swap cycles ${
-            intervalHours ? `every ${intervalHours} hour(s)` : "immediately"
-          }...`
-        );
-        runSwapCycle(cyclesCount, intervalHours);
-
-        rl.close();
-      }
-    );
-  }
-);
+main().catch(console.error);
